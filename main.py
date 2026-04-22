@@ -12,13 +12,13 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
 
 # 🔑 НАСТРОЙКИ
-TOKEN = os.environ.get("RAILWAY_TOKEN")
+TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 ADMINS = [1206582825]  # твой ID
 CHANNEL_ID = -1002168740058  # канал
 PORT = int(os.environ.get("PORT", 10000))
 
 if not TOKEN:
-    raise ValueError("❌ RAILWAY_TOKEN не найден")
+    raise ValueError("❌ TELEGRAM_BOT_TOKEN не найден")
 
 logging.basicConfig(level=logging.INFO)
 
