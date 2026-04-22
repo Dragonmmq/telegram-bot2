@@ -13,8 +13,8 @@ from aiogram.fsm.context import FSMContext
 
 # 🔑 НАСТРОЙКИ
 TOKEN = os.environ.get("BOT_TOKEN")
-ADMINS = [8394162540]  # твой ID
-CHANNEL_ID = -1003285603970  # канал
+ADMINS = [1206582825]  # твой ID
+CHANNEL_ID = -1002168740058  # канал
 PORT = int(os.environ.get("PORT", 10000))
 
 if not TOKEN:
