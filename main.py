@@ -11,25 +11,39 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
 
-# 🔑 НАСТРОЙКИ
-TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
-ADMINS = [1206582825]  # твой ID
-CHANNEL_ID = -1002168740058  # канал
-PORT = int(os.environ.get("PORT", 10000))
+# ================= ENV SYSTEM =================
+
+def get_env(name: str, required=True, default=None):
+    value = os.getenv(name, default)
+    if required and (value is None or value.strip() == ""):
+        raise ValueError(f"❌ ENV переменная '{name}' не найдена")
+    return value.strip() if isinstance(value, str) else value
+
+TOKEN = get_env("TELEGRAM_BOT_TOKEN") or get_env("BOT_TOKEN", required=False)
 
 if not TOKEN:
-    raise ValueError("❌ TELEGRAM_BOT_TOKEN не найден")
+    raise ValueError("❌ Не найден ни TELEGRAM_BOT_TOKEN ни BOT_TOKEN")
 
+PORT = int(os.getenv("PORT", 10000))
+
+ADMINS = [1206582825]
+CHANNEL_ID = -1002168740058
+
+# лог
 logging.basicConfig(level=logging.INFO)
+logging.info(f"✅ TOKEN загружен: {TOKEN[:10]}...")
+
+# ================= BOT =================
 
 bot = Bot(token=TOKEN, parse_mode="HTML")
 dp = Dispatcher()
 
-# 🗄 БАЗА ДАННЫХ
+# ================= DATABASE =================
+
 conn = sqlite3.connect("bot.db", check_same_thread=False)
 cursor = conn.cursor()
 
-cursor.execute('''
+cursor.execute("""
 CREATE TABLE IF NOT EXISTS messages (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER,
@@ -38,58 +52,59 @@ CREATE TABLE IF NOT EXISTS messages (
     file_id TEXT,
     date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 )
-''')
+""")
 
-cursor.execute('''
+cursor.execute("""
 CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT
 )
-''')
+""")
 
-cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('forwarding', '1')")
+cursor.execute("INSERT OR IGNORE INTO settings VALUES ('forwarding','1')")
 conn.commit()
 
 def get_forwarding():
     cursor.execute("SELECT value FROM settings WHERE key='forwarding'")
-    row = cursor.fetchone()
-    return row[0] == "1" if row else True
+    r = cursor.fetchone()
+    return r[0] == "1" if r else True
 
-def set_forwarding(val):
-    cursor.execute("UPDATE settings SET value=? WHERE key='forwarding'", (val,))
+def set_forwarding(v):
+    cursor.execute("UPDATE settings SET value=? WHERE key='forwarding'", (v,))
     conn.commit()
 
-# 📩 FSM для ответа
+# ================= FSM =================
+
 class ReplyState(StatesGroup):
     waiting = State()
 
 last_msg = {}
 SPAM_DELAY = 5
 
-# 🔘 КНОПКА
+# ================= UI =================
+
 def forward_kb():
     status = get_forwarding()
-    text = "🟢 Выключить пересылку" if status else "🔴 Включить пересылку"
+    text = "🟢 Выключить" if status else "🔴 Включить"
     return InlineKeyboardMarkup(
         inline_keyboard=[[InlineKeyboardButton(text=text, callback_data="toggle")]]
     )
 
-# 🚀 СТАРТ
+# ================= COMMANDS =================
+
 @dp.message(CommandStart())
 async def start(msg: types.Message):
     me = await bot.get_me()
     await msg.answer(
-        f"👋 Привет!\n\n📩 Напиши сюда — сообщение придёт анонимно\n\n🔗 Твоя ссылка:\n<code>https://t.me/{me.username}</code>"
+        f"👋 Напиши сюда — сообщение придёт анонимно\n\n🔗 https://t.me/{me.username}"
     )
 
-# ⚙️ КОМАНДА АДМИНА
 @dp.message(Command("forward"))
 async def forward_cmd(msg: types.Message):
     if msg.from_user.id not in ADMINS:
         return
-    await msg.answer("⚙️ Управление пересылкой", reply_markup=forward_kb())
+    await msg.answer("⚙️ Настройки", reply_markup=forward_kb())
 
-# 🔄 ПЕРЕКЛЮЧЕНИЕ
 @dp.callback_query(F.data == "toggle")
 async def toggle(cb: types.CallbackQuery):
     if cb.from_user.id not in ADMINS:
@@ -98,32 +113,31 @@ async def toggle(cb: types.CallbackQuery):
     new = not get_forwarding()
     set_forwarding("1" if new else "0")
 
-    await cb.message.edit_text("⚙️ Настройки обновлены", reply_markup=forward_kb())
+    await cb.message.edit_text("⚙️ Обновлено", reply_markup=forward_kb())
     await cb.answer()
 
-# ↩️ ОТВЕТ
+# ================= REPLY =================
+
 @dp.callback_query(F.data.startswith("reply_"))
 async def reply_handler(cb: types.CallbackQuery, state: FSMContext):
     uid = int(cb.data.split("_")[1])
     await state.update_data(uid=uid)
     await state.set_state(ReplyState.waiting)
-
-    await cb.message.answer("✍️ Напиши ответ")
+    await cb.message.answer("✍️ Ответ:")
     await cb.answer()
 
 @dp.message(ReplyState.waiting)
 async def send_reply(msg: types.Message, state: FSMContext):
     data = await state.get_data()
-
     try:
         await bot.send_message(data["uid"], f"📬 Ответ:\n\n{msg.text}")
         await msg.answer("✅ Отправлено")
     except:
         await msg.answer("❌ Ошибка")
-
     await state.clear()
 
-# 📩 ОСНОВНОЙ ОБРАБОТЧИК
+# ================= MAIN HANDLER =================
+
 @dp.message()
 async def handle(msg: types.Message):
     if msg.text and msg.text.startswith("/"):
@@ -138,100 +152,53 @@ async def handle(msg: types.Message):
     last_msg[user.id] = now
 
     text = msg.text or ""
-    media_type = None
-    file_id = None
-    extra = ""
 
-    if msg.photo:
-        media_type = "photo"
-        file_id = msg.photo[-1].file_id
-    elif msg.video:
-        media_type = "video"
-        file_id = msg.video.file_id
-    elif msg.sticker:
-        media_type = "sticker"
-        file_id = msg.sticker.file_id
-        extra = msg.sticker.emoji or ""
-    elif msg.voice:
-        media_type = "voice"
-        file_id = msg.voice.file_id
-        extra = f"({msg.voice.duration} сек)" if msg.voice.duration else ""
-    elif msg.video_note:
-        media_type = "video_note"
-        file_id = msg.video_note.file_id
-        extra = f"({msg.video_note.duration} сек)" if msg.video_note.duration else ""
-
-    # 📢 В КАНАЛ
+    # ===== В КАНАЛ =====
     if get_forwarding():
         try:
-            if text:
-                await bot.send_message(CHANNEL_ID, f"<blockquote>💬 {html_lib.escape(text)}</blockquote>")
-            elif media_type == "photo":
-                await bot.send_photo(CHANNEL_ID, file_id, caption="<blockquote>📸 Анонимное фото</blockquote>")
-            elif media_type == "video":
-                await bot.send_video(CHANNEL_ID, file_id, caption="<blockquote>🎥 Анонимное видео</blockquote>")
-            elif media_type == "sticker":
-                await bot.send_sticker(CHANNEL_ID, file_id)
-            elif media_type == "voice":
-                await bot.send_voice(CHANNEL_ID, file_id)
-                await bot.send_message(CHANNEL_ID, f"<blockquote>🎤 Голосовое {extra}</blockquote>")
-            elif media_type == "video_note":
-                await bot.send_video_note(CHANNEL_ID, file_id)
-                await bot.send_message(CHANNEL_ID, f"<blockquote>🔄 Кружочек {extra}</blockquote>")
+            await bot.send_message(
+                CHANNEL_ID,
+                f"<blockquote>💬 {html_lib.escape(text)}</blockquote>"
+            )
         except Exception as e:
-            logging.error(e)
+            logging.error(f"Ошибка канала: {e}")
 
-    # 👑 АДМИНУ
-    username = f"@{user.username}" if user.username else "Нет юзернейма"
-    full_name = html_lib.escape(user.full_name)
-
-    admin_text = f"📩 <b>Анонимное сообщение</b>\n\n<b>Имя:</b> {full_name}\n<b>Юзернейм:</b> {username}\n<b>ID:</b> <code>{user.id}</code>\n\n"
-
-    if text:
-        admin_text += html_lib.escape(text)
-    elif media_type:
-        admin_text += f"{media_type} {extra}"
+    # ===== АДМИНУ =====
+    username = f"@{user.username}" if user.username else "нет"
+    admin_text = (
+        f"📩 <b>Аноним</b>\n\n"
+        f"👤 {user.full_name}\n"
+        f"🔗 {username}\n"
+        f"🆔 <code>{user.id}</code>\n\n"
+        f"{html_lib.escape(text)}"
+    )
 
     kb = InlineKeyboardMarkup(
-        inline_keyboard=[[InlineKeyboardButton(text="↩️ Ответить анонимно", callback_data=f"reply_{user.id}")]]
+        inline_keyboard=[[InlineKeyboardButton(text="↩️ Ответить", callback_data=f"reply_{user.id}")]]
     )
 
     for admin in ADMINS:
         try:
-            if text or media_type in ["sticker", "voice", "video_note"]:
-                await bot.send_message(admin, admin_text, reply_markup=kb)
-
-            if media_type == "photo":
-                await bot.send_photo(admin, file_id, caption=admin_text, reply_markup=kb)
-            elif media_type == "video":
-                await bot.send_video(admin, file_id, caption=admin_text, reply_markup=kb)
-            elif media_type == "sticker":
-                await bot.send_sticker(admin, file_id)
-            elif media_type == "voice":
-                await bot.send_voice(admin, file_id)
-            elif media_type == "video_note":
-                await bot.send_video_note(admin, file_id)
-
+            await bot.send_message(admin, admin_text, reply_markup=kb)
         except Exception as e:
-            logging.error(e)
-
-    db_text = text if text else f"{media_type} {extra}".strip()
+            logging.error(f"Ошибка админа: {e}")
 
     cursor.execute(
-        "INSERT INTO messages (user_id, text, media_type, file_id) VALUES (?, ?, ?, ?)",
-        (user.id, db_text, media_type, file_id)
+        "INSERT INTO messages (user_id, text) VALUES (?, ?)",
+        (user.id, text)
     )
     conn.commit()
 
-    await msg.answer("✅ Отправлено анонимно")
+    await msg.answer("✅ Отправлено")
 
-# 🌐 ВЕБ-СЕРВЕР (чтобы Render не спал)
-async def handle_web(request):
+# ================= WEB =================
+
+async def web_handler(request):
     return web.Response(text="OK")
 
 async def start_web():
     app = web.Application()
-    app.router.add_get("/", handle_web)
+    app.router.add_get("/", web_handler)
 
     runner = web.AppRunner(app)
     await runner.setup()
@@ -239,8 +206,10 @@ async def start_web():
     site = web.TCPSite(runner, "0.0.0.0", PORT)
     await site.start()
 
-# ▶️ ЗАПУСК
+# ================= RUN =================
+
 async def main():
+    logging.info("🚀 Бот запускается...")
     await start_web()
     await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
